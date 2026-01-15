@@ -12,28 +12,43 @@ import { challenges } from '../data/datacache'
 import * as challengeUtils from '../lib/challengeUtils'
 
 export function servePublicFiles () {
-  return ({ params, query }: Request, res: Response, next: NextFunction) => {
+  return ({ params }: Request, res: Response, next: NextFunction) => {
     const file = params.file
 
-    if (!file.includes('/')) {
+    // FIX: Instead of checking what is NOT allowed, we check against an allowlist.
+    // This prevents traversal characters (../) and unexpected file types.
+    const allowedFiles = [
+      'acquisitions.md',
+      'legal.md',
+      'incident-support.kdbx',
+      'juiceshop_presskit.pdf'
+    ]
+
+    if (allowedFiles.includes(file)) {
       verify(file, res, next)
     } else {
       res.status(403)
-      next(new Error('File names cannot contain forward slashes!'))
+      next(new Error('Access denied: The requested file is not in the public repository.'))
     }
   }
 
   function verify (file: string, res: Response, next: NextFunction) {
-    if (file && (endsWithAllowlistedFileType(file) || (file === 'incident-support.kdbx'))) {
-      file = security.cutOffPoisonNullByte(file)
+    // We keep the original logic for challenge solving but use a safe absolute path.
+    file = security.cutOffPoisonNullByte(file)
 
-      challengeUtils.solveIf(challenges.directoryListingChallenge, () => { return file.toLowerCase() === 'acquisitions.md' })
-      verifySuccessfulPoisonNullByteExploit(file)
+    challengeUtils.solveIf(challenges.directoryListingChallenge, () => { return file.toLowerCase() === 'acquisitions.md' })
+    verifySuccessfulPoisonNullByteExploit(file)
 
-      res.sendFile(path.resolve('ftp/', file))
+    // Securely resolve the path relative to the intended directory
+    const root = path.resolve('ftp')
+    const filePath = path.join(root, file)
+
+    // Ensure the resolved path is still within the 'ftp' directory (Defense in Depth)
+    if (filePath.startsWith(root)) {
+      res.sendFile(filePath)
     } else {
       res.status(403)
-      next(new Error('Only .md and .pdf files are allowed!'))
+      next(new Error('Path traversal attempt detected.'))
     }
   }
 
@@ -47,9 +62,5 @@ export function servePublicFiles () {
       return challenges.easterEggLevelOneChallenge.solved || challenges.forgottenDevBackupChallenge.solved || challenges.forgottenBackupChallenge.solved ||
         challenges.misplacedSignatureFileChallenge.solved || file.toLowerCase() === 'encrypt.pyc'
     })
-  }
-
-  function endsWithAllowlistedFileType (param: string) {
-    return utils.endsWith(param, '.md') || utils.endsWith(param, '.pdf')
   }
 }

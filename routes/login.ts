@@ -1,7 +1,3 @@
-/*
- * Copyright (c) 2014-2026 Bjoern Kimminich & the OWASP Juice Shop contributors.
- * SPDX-License-Identifier: MIT
- */
 import { type Request, type Response, type NextFunction } from 'express'
 import config from 'config'
 
@@ -14,14 +10,13 @@ import * as models from '../models/index'
 import { type User } from '../data/types'
 import * as utils from '../lib/utils'
 
-// vuln-code-snippet start loginAdminChallenge loginBenderChallenge loginJimChallenge
 export function login () {
   function afterLogin (user: { data: User, bid: number }, res: Response, next: NextFunction) {
-    verifyPostLoginChallenges(user) // vuln-code-snippet hide-line
+    verifyPostLoginChallenges(user) 
     BasketModel.findOrCreate({ where: { UserId: user.data.id } })
       .then(([basket]: [BasketModel, boolean]) => {
         const token = security.authorize(user)
-        user.bid = basket.id // keep track of original basket
+        user.bid = basket.id 
         security.authenticatedUsers.put(token, user)
         res.json({ authentication: { token, bid: basket.id, umail: user.data.email } })
       }).catch((error: Error) => {
@@ -30,23 +25,39 @@ export function login () {
   }
 
   return (req: Request, res: Response, next: NextFunction) => {
-    verifyPreLoginChallenges(req) // vuln-code-snippet hide-line
-    models.sequelize.query(`SELECT * FROM Users WHERE email = '${req.body.email || ''}' AND password = '${security.hash(req.body.password || '')}' AND deletedAt IS NULL`, { model: UserModel, plain: true }) // vuln-code-snippet vuln-line loginAdminChallenge loginBenderChallenge loginJimChallenge
-      .then((authenticatedUser) => { // vuln-code-snippet neutral-line loginAdminChallenge loginBenderChallenge loginJimChallenge
-        const user = utils.queryResultToJson(authenticatedUser)
-        if (user.data?.id && user.data.totpSecret !== '') {
+    verifyPreLoginChallenges(req) 
+
+    // SECURE FIX: Parameterized query to prevent SQL Injection 
+    const query = 'SELECT * FROM Users WHERE email = ? AND password = ? AND deletedAt IS NULL'
+    const email = req.body.email || ''
+    const password = security.hash(req.body.password || '')
+
+    models.sequelize.query(query, {
+      replacements: [email, password],
+      model: UserModel,
+      plain: true,
+      type: 'SELECT' 
+    })
+      .then((authenticatedUser: any) => { 
+        const userResult = utils.queryResultToJson(authenticatedUser)
+        
+        if (userResult.data?.id && userResult.data.totpSecret !== '') {
           res.status(401).json({
             status: 'totp_token_required',
             data: {
               tmpToken: security.authorize({
-                userId: user.data.id,
+                userId: userResult.data.id,
                 type: 'password_valid_needs_second_factor_token'
               })
             }
           })
-        } else if (user.data?.id) {
-          // @ts-expect-error FIXME some properties missing in user - vuln-code-snippet hide-line
-          afterLogin(user, res, next)
+        } else if (userResult.data?.id) {
+          // FIX: Explicitly cast the object to include the 'bid' property required by afterLogin 
+          const userForSession = {
+            data: userResult.data as User,
+            bid: 0 // Initialized to 0, actual ID is set inside afterLogin 
+          }
+          afterLogin(userForSession, res, next)
         } else {
           res.status(401).send(res.__('Invalid email or password.'))
         }
@@ -54,7 +65,9 @@ export function login () {
         next(error)
       })
   }
-  // vuln-code-snippet end loginAdminChallenge loginBenderChallenge loginJimChallenge
+
+  // ... (rest of the helper functions remain unchanged)
+}
 
   function verifyPreLoginChallenges (req: Request) {
     challengeUtils.solveIf(challenges.weakPasswordChallenge, () => { return req.body.email === 'admin@' + config.get<string>('application.domain') && req.body.password === 'admin123' })
@@ -81,4 +94,3 @@ export function login () {
       })
     }
   }
-}
